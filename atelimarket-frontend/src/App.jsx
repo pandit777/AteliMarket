@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, Link, useLocation, useParams } from 'react-router-dom';
 import axios from 'axios';
 
-// API URLs from environment
-const API_URL = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || 'http://localhost:5000/api';
-const AUTH_URL = import.meta.env.VITE_AUTH_URL || import.meta.env.REACT_APP_AUTH_URL || 'http://localhost:5000/api/auth';
+// =============================================
+// ✅ API URLs - PRODUCTION (Render Backend)
+// =============================================
+const API_URL = 'https://atelimarket-backend.onrender.com/api';
+const AUTH_URL = 'https://atelimarket-backend.onrender.com/api/auth';
 
 // =============================================
 // IMAGE URL BUILDER
@@ -493,7 +495,7 @@ const OrderTracking = () => {
 };
 
 // =============================================
-// ✅ ORDERS PAGE COMPONENT - FIXED
+// ✅ ORDERS PAGE COMPONENT - WITH CANCEL BUTTON
 // =============================================
 const OrdersPage = () => {
   const [orders, setOrders] = useState([]);
@@ -539,6 +541,50 @@ const OrdersPage = () => {
       'Cancelled': 'bg-red-100 text-red-700'
     };
     return styles[status] || 'bg-slate-100 text-slate-700';
+  };
+
+  // ✅ CANCEL ORDER FUNCTION
+  const handleCancelOrder = async (orderId) => {
+    if (!window.confirm('Are you sure you want to cancel this order?')) {
+      return;
+    }
+    
+    const token = localStorage.getItem('atelimarket_user_token');
+    if (!token) {
+      alert('Please login to cancel order');
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      const response = await axios.patch(
+        `${API_URL}/orders/${orderId}/cancel`,
+        {},
+        {
+          headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (response.data.success) {
+        setOrders(prev => prev.map(order => 
+          order._id === orderId 
+            ? { ...order, status: 'Cancelled' } 
+            : order
+        ));
+        alert('✅ Order cancelled successfully!');
+      } else {
+        alert(response.data.message || 'Failed to cancel order');
+      }
+    } catch (err) {
+      console.error('Error cancelling order:', err);
+      const errorMsg = err.response?.data?.message || 'Failed to cancel order. Please try again.';
+      alert(errorMsg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (loading) {
@@ -615,15 +661,29 @@ const OrdersPage = () => {
                     </span>
                   </div>
                 </div>
-                <Link 
-                  to={`/orders/track/${order._id}`}
-                  className="bg-[#0B3C5D] text-white px-5 py-2 rounded-xl text-sm font-bold hover:bg-[#07263b] transition text-center whitespace-nowrap"
-                >
-                  Track Order →
-                </Link>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Link 
+                    to={`/orders/track/${order._id}`}
+                    className="bg-[#0B3C5D] text-white px-5 py-2 rounded-xl text-sm font-bold hover:bg-[#07263b] transition text-center whitespace-nowrap"
+                  >
+                    Track Order →
+                  </Link>
+                  
+                  {/* ✅ CANCEL BUTTON - Only for Pending or Confirmed orders */}
+                  {order.status !== 'Delivered' && 
+                   order.status !== 'Cancelled' && 
+                   order.status !== 'Shipped' && (
+                    <button
+                      onClick={() => handleCancelOrder(order._id)}
+                      className="bg-red-50 text-red-600 px-4 py-2 rounded-xl text-sm font-bold hover:bg-red-100 transition whitespace-nowrap"
+                    >
+                      Cancel Order
+                    </button>
+                  )}
+                </div>
               </div>
 
-              {/* ✅ FIX: Order Items Display - Products properly shown */}
+              {/* Order Items Display */}
               {order.items && order.items.length > 0 && (
                 <div className="mt-4 pt-4 border-t border-slate-100">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
