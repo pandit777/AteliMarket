@@ -7,8 +7,9 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 10000,
     allowedHosts: [
+      'atelimarket.shop',
+      'www.atelimarket.shop',
       'atelimarket-frontend.onrender.com',
-      'localhost',
       '.onrender.com'
     ]
   },
@@ -16,8 +17,9 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 10000,
     allowedHosts: [
+      'atelimarket.shop',
+      'www.atelimarket.shop',
       'atelimarket-frontend.onrender.com',
-      'localhost',
       '.onrender.com'
     ]
   }
