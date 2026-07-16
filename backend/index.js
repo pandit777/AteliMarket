@@ -34,7 +34,7 @@ const supabase = createClient(supabaseUrl, supabaseSecretKey);
 console.log('✅ Supabase client initialized');
 
 // =============================================
-// CORS CONFIGURATION
+// CORS CONFIGURATION - UPDATED
 // =============================================
 const allowedOrigins = [
   'https://atelimarket.shop',
@@ -42,6 +42,7 @@ const allowedOrigins = [
   'http://atelimarket.shop',
   'http://www.atelimarket.shop',
   'https://atelimarket-frontend.onrender.com',
+  'https://atelimarket-backend.onrender.com',
   'https://atelimarket.onrender.com',
   'http://localhost:5173',
   'http://localhost:3000',
