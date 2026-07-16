@@ -34,7 +34,7 @@ const supabase = createClient(supabaseUrl, supabaseSecretKey);
 console.log('✅ Supabase client initialized');
 
 // =============================================
-// CORS CONFIGURATION - UPDATED
+// CORS CONFIGURATION
 // =============================================
 const allowedOrigins = [
   'https://atelimarket.shop',
@@ -42,7 +42,6 @@ const allowedOrigins = [
   'http://atelimarket.shop',
   'http://www.atelimarket.shop',
   'https://atelimarket-frontend.onrender.com',
-  'https://atelimarket-backend.onrender.com',
   'https://atelimarket.onrender.com',
   'http://localhost:5173',
   'http://localhost:3000',
@@ -1451,9 +1450,7 @@ app.get('/api/orders', async (req, res) => {
   }
 });
 
-// =============================================
-// ✅ ORDER TRACKING - FIXED FOR ADMINS TABLE
-// =============================================
+// Get order tracking
 app.get('/api/orders/:id/tracking', async (req, res) => {
   try {
     const orderId = req.params.id;
@@ -1472,26 +1469,14 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
     if (token) {
       try {
         const decoded = jwt.verify(token, jwtSecret);
-        const userId = decoded.userId;
         
-        // ✅ FIX: Check BOTH users table AND admins table
         const { data: user, error: userError } = await supabase
           .from('users')
           .select('role')
-          .eq('id', userId)
+          .eq('id', decoded.userId)
           .single();
         
-        const { data: admin, error: adminError } = await supabase
-          .from('admins')
-          .select('id')
-          .eq('id', userId)
-          .single();
-        
-        // ✅ Check if user is admin OR order owner
-        const isAdmin = (user && user.role === 'admin') || admin;
-        const isOwner = order.user_id === userId;
-        
-        if (isAdmin || isOwner) {
+        if (user && (user.role === 'admin' || order.user_id === decoded.userId)) {
           const timeline = getOrderTimeline(order);
           
           return res.json({
@@ -1580,9 +1565,7 @@ function getOrderTimeline(order) {
   return timeline;
 }
 
-// =============================================
-// ✅ UPDATE ORDER STATUS - FIXED FOR ADMINS TABLE
-// =============================================
+// Update order status
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
@@ -1600,32 +1583,15 @@ app.patch('/api/orders/:id/status', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid token' });
     }
     
-    const userId = decoded.userId;
-    
-    // ✅ FIX: Check BOTH users table AND admins table
     const { data: user, error: userError } = await supabase
       .from('users')
       .select('role, name')
-      .eq('id', userId)
+      .eq('id', decoded.userId)
       .single();
     
-    const { data: admin, error: adminError } = await supabase
-      .from('admins')
-      .select('id')
-      .eq('id', userId)
-      .single();
-    
-    // ✅ Check if user is admin (either in users table with role admin OR in admins table)
-    const isAdmin = (user && user.role === 'admin') || admin;
-    
-    if (!isAdmin) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Admin access required' 
-      });
+    if (userError || !user || user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
     }
-    
-    const adminName = user?.name || 'Admin';
     
     const validStatuses = ['Pending', 'Confirmed', 'Shipped', 'Delivered', 'Cancelled'];
     if (!validStatuses.includes(status)) {
@@ -1647,7 +1613,7 @@ app.patch('/api/orders/:id/status', async (req, res) => {
     statusHistory.push({
       status: status,
       timestamp: new Date().toISOString(),
-      updatedBy: adminName
+      updatedBy: user.name || 'Admin'
     });
     
     const { data: updatedOrder, error: updateError } = await supabase
@@ -1680,116 +1646,7 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   }
 });
 
-// =============================================
-// ✅ USER CANCEL ORDER
-// =============================================
-app.patch('/api/orders/:id/cancel', async (req, res) => {
-  try {
-    const orderId = req.params.id;
-    
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Authentication required' 
-      });
-    }
-    
-    let decoded;
-    try {
-      decoded = jwt.verify(token, jwtSecret);
-    } catch (err) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Invalid token' 
-      });
-    }
-    
-    const userId = decoded.userId;
-    
-    const { data: order, error: fetchError } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('id', orderId)
-      .single();
-    
-    if (fetchError || !order) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Order not found' 
-      });
-    }
-    
-    const { data: admin, error: adminError } = await supabase
-      .from('admins')
-      .select('id')
-      .eq('id', userId)
-      .single();
-    
-    const isAdmin = !adminError && admin;
-    const isOwner = order.user_id === userId;
-    
-    if (!isAdmin && !isOwner) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'You are not authorized to cancel this order' 
-      });
-    }
-    
-    const cancellableStatuses = ['Pending', 'Confirmed'];
-    if (!cancellableStatuses.includes(order.status)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Order cannot be cancelled. Current status: ${order.status}` 
-      });
-    }
-    
-    const statusHistory = order.status_history || [];
-    statusHistory.push({
-      status: 'Cancelled',
-      timestamp: new Date().toISOString(),
-      updatedBy: isAdmin ? 'Admin' : 'User'
-    });
-    
-    const { data: updatedOrder, error: updateError } = await supabase
-      .from('orders')
-      .update({
-        status: 'Cancelled',
-        status_history: statusHistory,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', orderId)
-      .select()
-      .single();
-    
-    if (updateError) {
-      console.error('Error cancelling order:', updateError);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to cancel order' 
-      });
-    }
-    
-    console.log(`✅ Order ${orderId} cancelled by ${isAdmin ? 'Admin' : 'User'}`);
-    
-    res.json({
-      success: true,
-      message: 'Order cancelled successfully',
-      order: formatOrder(updatedOrder)
-    });
-    
-  } catch (error) {
-    console.error('❌ Error cancelling order:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error while cancelling order' 
-    });
-  }
-});
-
-// =============================================
-// ✅ ADMIN ORDERS - FIXED FOR ADMINS TABLE
-// =============================================
+// Admin orders
 app.get('/api/admin/orders', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -1804,25 +1661,13 @@ app.get('/api/admin/orders', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid token' });
     }
     
-    const userId = decoded.userId;
-    
-    // ✅ FIX: Check BOTH users table AND admins table
     const { data: user, error: userError } = await supabase
       .from('users')
       .select('role')
-      .eq('id', userId)
+      .eq('id', decoded.userId)
       .single();
     
-    const { data: admin, error: adminError } = await supabase
-      .from('admins')
-      .select('id')
-      .eq('id', userId)
-      .single();
-    
-    // ✅ Check if user is admin
-    const isAdmin = (user && user.role === 'admin') || admin;
-    
-    if (!isAdmin) {
+    if (userError || !user || user.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Admin access required' });
     }
     
@@ -1848,6 +1693,7 @@ app.get('/api/admin/orders', async (req, res) => {
       return res.status(500).json({ success: false, message: 'Error fetching orders' });
     }
     
+    // Get status counts
     const { data: statusCounts, error: countError } = await supabase
       .from('orders')
       .select('status', { count: 'exact', head: false });
@@ -1904,6 +1750,7 @@ app.post('/api/orders/test', (req, res) => {
 // =============================================
 app.get('/health', async (req, res) => {
   try {
+    // Test Supabase connection
     const { data, error } = await supabase
       .from('products')
       .select('id')
@@ -1943,9 +1790,7 @@ app.get('/', (req, res) => {
       orders: '/api/orders',
       tracking: '/api/orders/:id/tracking',
       test: '/api/orders/test',
-      verify: '/api/auth/verify',
-      cancel: '/api/orders/:id/cancel',
-      adminOrders: '/api/admin/orders'
+      verify: '/api/auth/verify'
     },
     note: 'Image URLs are used instead of file uploads, Cart saved in Supabase PostgreSQL'
   });
