@@ -1,0 +1,1981 @@
+const express = require('express');
+const { createClient } = require('@supabase/supabase-js');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const path = require('path');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+
+// Load environment variables
+dotenv.config();
+
+const app = express();
+
+// =============================================
+// ENVIRONMENT VARIABLES CHECK
+// =============================================
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
+const port = process.env.PORT || 5000;
+const jwtSecret = process.env.JWT_SECRET || 'atelimarket_super_secret_key_2026';
+
+console.log('🚀 Starting AteliMarket Backend with Supabase...');
+console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+console.log(`🔗 Supabase URL: ${supabaseUrl ? '✅ Set' : '❌ Not Set'}`);
+
+if (!supabaseUrl || !supabaseSecretKey) {
+  console.error('❌ Supabase credentials are missing!');
+  console.error('Please set SUPABASE_URL and SUPABASE_SECRET_KEY in .env file');
+  process.exit(1);
+}
+
+// Initialize Supabase Client (using Secret Key for backend)
+const supabase = createClient(supabaseUrl, supabaseSecretKey);
+console.log('✅ Supabase client initialized');
+
+// =============================================
+// CORS CONFIGURATION
+// =============================================
+const allowedOrigins = [
+  'https://atelimarket.shop',
+  'https://www.atelimarket.shop',
+  'http://atelimarket.shop',
+  'http://www.atelimarket.shop',
+  'https://atelimarket-frontend.onrender.com',
+  'https://atelimarket.onrender.com',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:5000',
+  '*.onrender.com'
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin) || origin.endsWith('.onrender.com')) {
+      callback(null, true);
+    } else {
+      console.warn(`❌ CORS blocked: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
+
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// =============================================
+// STATIC FILES - FOR OLD UPLOADED IMAGES
+// =============================================
+const uploadsDir = path.join(__dirname, 'uploads');
+const fs = require('fs');
+
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+app.use('/uploads', express.static(uploadsDir, {
+  setHeaders: (res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', 'public, max-age=31536000');
+  }
+}));
+
+console.log(`📁 Uploads directory: ${uploadsDir}`);
+
+// =============================================
+// HELPER FUNCTIONS
+// =============================================
+
+// Format user data
+const formatUser = (user) => {
+  if (!user) return null;
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role || 'user',
+    createdAt: user.created_at || user.createdAt
+  };
+};
+
+// Format product data (convert snake_case to camelCase for frontend)
+const formatProduct = (product) => {
+  if (!product) return null;
+  return {
+    _id: product.id,
+    id: product.id,
+    name: product.name,
+    price: product.price,
+    originalPrice: product.original_price,
+    discountPercent: product.discount_percent || 0,
+    category: product.category,
+    stock: product.stock || 10,
+    description: product.description || '',
+    image: product.image || '',
+    imageUrl: product.image_url || '',
+    images: product.images || [],
+    brand: product.brand || '',
+    weight: product.weight || null,
+    dimensions: product.dimensions || null,
+    color: product.color || '',
+    size: product.size || '',
+    material: product.material || '',
+    warranty: product.warranty || '',
+    tags: product.tags || [],
+    icon: product.icon || '📦',
+    rating: product.rating || 0,
+    reviewsCount: product.reviews_count || 0,
+    popularity: product.popularity || 0,
+    isActive: product.is_active !== false,
+    createdAt: product.created_at,
+    updatedAt: product.updated_at,
+    mainImage: product.image || product.image_url || (product.images && product.images.length > 0 ? product.images[0] : '')
+  };
+};
+
+// Format cart item
+const formatCartItem = (item) => {
+  return {
+    productId: item.product_id,
+    name: item.name,
+    price: item.price,
+    originalPrice: item.original_price || 0,
+    discountPercent: item.discount_percent || 0,
+    qty: item.qty,
+    image: item.image || '',
+    imageUrl: item.image_url || '',
+    stock: item.stock || 0,
+    category: item.category || ''
+  };
+};
+
+// Format cart
+const formatCart = (cart) => {
+  if (!cart) {
+    return {
+      items: [],
+      totalItems: 0,
+      totalPrice: 0,
+      totalSavings: 0,
+      updatedAt: new Date().toISOString()
+    };
+  }
+  
+  const items = cart.items?.map(formatCartItem) || [];
+  const totalItems = items.reduce((sum, item) => sum + item.qty, 0);
+  const totalPrice = items.reduce((sum, item) => sum + (item.price * item.qty), 0);
+  const totalSavings = items.reduce((sum, item) => {
+    return sum + ((item.originalPrice - item.price) * item.qty);
+  }, 0);
+
+  return {
+    items,
+    totalItems,
+    totalPrice,
+    totalSavings,
+    updatedAt: cart.updated_at || new Date().toISOString()
+  };
+};
+
+// Format order
+const formatOrder = (order) => {
+  if (!order) return null;
+  return {
+    _id: order.id,
+    id: order.id,
+    userId: order.user_id,
+    userName: order.user_name || 'Guest',
+    userEmail: order.user_email || '',
+    items: order.items || [],
+    total: order.total,
+    paymentMethod: order.payment_method || 'cod',
+    referenceId: order.reference_id || null,
+    delivery: order.delivery || {},
+    status: order.status || 'Pending',
+    statusHistory: order.status_history || [],
+    createdAt: order.created_at,
+    updatedAt: order.updated_at
+  };
+};
+
+// =============================================
+// AUTH ROUTES
+// =============================================
+
+// Register
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    
+    if (!name || !email || !password) {
+      return res.status(400).json({ success: false, message: 'All fields are required' });
+    }
+    
+    // Check if user exists
+    const { data: existingUser, error: checkError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email)
+      .single();
+    
+    if (existingUser) {
+      return res.status(400).json({ success: false, message: 'User already exists' });
+    }
+    
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    // Create user
+    const { data: user, error: insertError } = await supabase
+      .from('users')
+      .insert({
+        name,
+        email,
+        password: hashedPassword,
+        role: 'user'
+      })
+      .select()
+      .single();
+    
+    if (insertError) {
+      console.error('Supabase insert error:', insertError);
+      return res.status(500).json({ success: false, message: 'Failed to create user' });
+    }
+    
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role },
+      jwtSecret,
+      { expiresIn: '7d' }
+    );
+    
+    res.status(201).json({
+      success: true,
+      token,
+      user: formatUser(user)
+    });
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// =============================================
+// ✅ LOGIN - UPDATED: Checks BOTH admins AND users tables
+// =============================================
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    if (!email || !password) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Email and password required' 
+      });
+    }
+    
+    console.log('🔍 Login attempt:', email);
+    
+    // ✅ FIRST: Check admins table
+    const { data: admin, error: adminError } = await supabase
+      .from('admins')
+      .select('*')
+      .eq('email', email)
+      .single();
+    
+    if (admin) {
+      console.log('📊 Admin found, verifying password...');
+      
+      const isValid = await bcrypt.compare(password, admin.password);
+      console.log('✅ Password valid:', isValid);
+      
+      if (!isValid) {
+        return res.status(401).json({ 
+          success: false, 
+          message: 'Invalid credentials' 
+        });
+      }
+      
+      const token = jwt.sign(
+        { userId: admin.id, email: admin.email, role: 'admin' },
+        jwtSecret,
+        { expiresIn: '7d' }
+      );
+      
+      console.log('✅ Admin logged in!');
+      
+      return res.json({
+        success: true,
+        token,
+        user: {
+          id: admin.id,
+          email: admin.email,
+          role: 'admin'
+        }
+      });
+    }
+    
+    // ✅ SECOND: If not admin, check users table
+    const { data: user, error: findError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single();
+    
+    if (findError || !user) {
+      console.log('❌ User not found');
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid credentials' 
+      });
+    }
+    
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid credentials' 
+      });
+    }
+    
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role || 'user' },
+      jwtSecret,
+      { expiresIn: '7d' }
+    );
+    
+    res.json({
+      success: true,
+      token,
+      user: formatUser(user)
+    });
+    
+  } catch (error) {
+    console.error('❌ Login error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error' 
+    });
+  }
+});
+
+// Verify token
+app.get('/api/auth/verify', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No token provided' });
+    }
+    
+    const decoded = jwt.verify(token, jwtSecret);
+    
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, name, email, role, created_at')
+      .eq('id', decoded.userId)
+      .single();
+    
+    if (error || !user) {
+      return res.status(401).json({ success: false, message: 'User not found' });
+    }
+    
+    res.json({ success: true, user: formatUser(user) });
+  } catch (error) {
+    res.status(401).json({ success: false, message: 'Invalid token' });
+  }
+});
+
+// =============================================
+// PRODUCT ROUTES
+// =============================================
+
+// Get all products
+app.get('/api/products', async (req, res) => {
+  try {
+    const { category, search, sort } = req.query;
+    
+    let query = supabase.from('products').select('*');
+    
+    if (category && category !== 'All') {
+      query = query.eq('category', category);
+    }
+    
+    if (search) {
+      query = query.or(`name.ilike.%${search}%,category.ilike.%${search}%,description.ilike.%${search}%`);
+    }
+    
+    // Apply sorting
+    if (sort === 'price-low') {
+      query = query.order('price', { ascending: true });
+    } else if (sort === 'price-high') {
+      query = query.order('price', { ascending: false });
+    } else if (sort === 'name') {
+      query = query.order('name', { ascending: true });
+    } else if (sort === 'discount') {
+      query = query.order('discount_percent', { ascending: false });
+    } else {
+      query = query.order('created_at', { ascending: false });
+    }
+    
+    const { data: products, error } = await query;
+    
+    if (error) {
+      console.error('Supabase error:', error);
+      return res.status(500).json({ success: false, message: 'Error fetching products' });
+    }
+    
+    // Format products for frontend compatibility
+    const formattedProducts = products.map(formatProduct);
+    res.json({ success: true, products: formattedProducts });
+  } catch (error) {
+    console.error('Error fetching products:', error);
+    res.status(500).json({ success: false, message: 'Error fetching products' });
+  }
+});
+
+// Get single product
+app.get('/api/products/:id', async (req, res) => {
+  try {
+    const { data: product, error } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
+    
+    if (error || !product) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+    
+    res.json({ success: true, product: formatProduct(product) });
+  } catch (error) {
+    console.error('Error fetching product:', error);
+    res.status(500).json({ success: false, message: 'Error fetching product' });
+  }
+});
+
+// Add Product
+app.post('/api/products/add', async (req, res) => {
+  try {
+    console.log('📦 Adding product with URL...');
+    console.log('Body:', req.body);
+
+    const { 
+      name, 
+      originalPrice, 
+      discountPercent, 
+      category, 
+      stock, 
+      description, 
+      icon,
+      imageUrl,
+      images,
+      brand,
+      weight,
+      color,
+      size,
+      material,
+      warranty,
+      tags
+    } = req.body;
+
+    if (!name || !originalPrice) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Name and original price are required' 
+      });
+    }
+
+    if (!imageUrl) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Image URL is required' 
+      });
+    }
+
+    let finalPrice = parseFloat(originalPrice);
+    const discount = parseFloat(discountPercent) || 0;
+    
+    if (discount > 0) {
+      finalPrice = finalPrice - (finalPrice * (discount / 100));
+    }
+
+    let parsedImages = [];
+    if (images) {
+      try {
+        parsedImages = typeof images === 'string' ? JSON.parse(images) : images;
+      } catch (e) {
+        parsedImages = images.split(',').map(img => img.trim());
+      }
+    }
+
+    if (imageUrl && parsedImages.length === 0) {
+      parsedImages = [imageUrl.trim()];
+    }
+
+    let parsedTags = [];
+    if (tags) {
+      try {
+        parsedTags = typeof tags === 'string' ? JSON.parse(tags) : tags;
+      } catch (e) {
+        parsedTags = tags.split(',').map(t => t.trim());
+      }
+    }
+
+    const productData = {
+      name: name.trim(),
+      original_price: parseFloat(originalPrice),
+      price: Math.round(finalPrice),
+      discount_percent: discount,
+      category: category || 'Groceries',
+      stock: parseInt(stock) || 10,
+      description: description || '',
+      icon: icon || '📦',
+      image: imageUrl.trim(),
+      image_url: imageUrl.trim(),
+      images: parsedImages,
+      brand: brand || '',
+      weight: weight || null,
+      color: color || '',
+      size: size || '',
+      material: material || '',
+      warranty: warranty || '',
+      tags: parsedTags,
+      is_active: true,
+      rating: 0,
+      reviews_count: 0,
+      popularity: 0
+    };
+
+    const { data: product, error } = await supabase
+      .from('products')
+      .insert(productData)
+      .select()
+      .single();
+    
+    if (error) {
+      console.error('Supabase insert error:', error);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Error adding product',
+        error: error.message 
+      });
+    }
+    
+    console.log(`✅ Product added successfully: ${product.name}`);
+    res.status(201).json({ 
+      success: true, 
+      message: 'Product added successfully', 
+      product: formatProduct(product) 
+    });
+    
+  } catch (error) {
+    console.error('❌ Error adding product:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error adding product',
+      error: error.message 
+    });
+  }
+});
+
+// Update Product
+app.put('/api/products/update/:id', async (req, res) => {
+  try {
+    const productId = req.params.id;
+    const updates = req.body;
+    
+    // Get current product
+    const { data: currentProduct, error: fetchError } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', productId)
+      .single();
+    
+    if (fetchError || !currentProduct) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    // Build update object (convert camelCase to snake_case)
+    const updateData = {};
+    
+    if (updates.name) updateData.name = updates.name.trim();
+    if (updates.originalPrice) {
+      updateData.original_price = parseFloat(updates.originalPrice);
+      const disc = updates.discountPercent !== undefined ? parseFloat(updates.discountPercent) : currentProduct.discount_percent;
+      updateData.price = Math.round(updateData.original_price - (updateData.original_price * (disc / 100)));
+    }
+    if (updates.discountPercent !== undefined) {
+      updateData.discount_percent = parseFloat(updates.discountPercent);
+      const origPrice = updateData.original_price || currentProduct.original_price;
+      updateData.price = Math.round(origPrice - (origPrice * (updateData.discount_percent / 100)));
+    }
+    if (updates.category) updateData.category = updates.category.trim();
+    if (updates.stock !== undefined) updateData.stock = parseInt(updates.stock);
+    if (updates.description !== undefined) updateData.description = updates.description;
+    if (updates.icon) updateData.icon = updates.icon;
+    if (updates.imageUrl !== undefined) {
+      updateData.image = updates.imageUrl.trim();
+      updateData.image_url = updates.imageUrl.trim();
+    }
+    if (updates.images !== undefined) {
+      try {
+        updateData.images = typeof updates.images === 'string' ? JSON.parse(updates.images) : updates.images;
+      } catch (e) {
+        updateData.images = updates.images.split(',').map(img => img.trim());
+      }
+    }
+    if (updates.brand !== undefined) updateData.brand = updates.brand.trim();
+    if (updates.weight !== undefined) updateData.weight = updates.weight || null;
+    if (updates.color !== undefined) updateData.color = updates.color.trim();
+    if (updates.size !== undefined) updateData.size = updates.size.trim();
+    if (updates.material !== undefined) updateData.material = updates.material.trim();
+    if (updates.warranty !== undefined) updateData.warranty = updates.warranty.trim();
+    if (updates.tags !== undefined) {
+      try {
+        updateData.tags = typeof updates.tags === 'string' ? JSON.parse(updates.tags) : updates.tags;
+      } catch (e) {
+        updateData.tags = updates.tags.split(',').map(t => t.trim());
+      }
+    }
+
+    const { data: product, error } = await supabase
+      .from('products')
+      .update(updateData)
+      .eq('id', productId)
+      .select()
+      .single();
+    
+    if (error) {
+      console.error('Supabase update error:', error);
+      return res.status(500).json({ success: false, message: 'Error updating product' });
+    }
+    
+    console.log(`✅ Product updated: ${product.name}`);
+    res.json({ success: true, message: 'Product updated successfully', product: formatProduct(product) });
+    
+  } catch (error) {
+    console.error('Error updating product:', error);
+    res.status(500).json({ success: false, message: 'Error updating product' });
+  }
+});
+
+// Delete Product
+app.delete('/api/products/delete/:id', async (req, res) => {
+  try {
+    // Check if product exists
+    const { data: product, error: fetchError } = await supabase
+      .from('products')
+      .select('name')
+      .eq('id', req.params.id)
+      .single();
+    
+    if (fetchError || !product) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    const { error } = await supabase
+      .from('products')
+      .delete()
+      .eq('id', req.params.id);
+    
+    if (error) {
+      console.error('Supabase delete error:', error);
+      return res.status(500).json({ success: false, message: 'Error deleting product' });
+    }
+    
+    console.log(`🗑️ Product deleted: ${product.name}`);
+    res.json({ success: true, message: 'Product deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting product:', error);
+    res.status(500).json({ success: false, message: 'Error deleting product' });
+  }
+});
+
+// =============================================
+// CART ROUTES
+// =============================================
+
+// Get user cart
+app.get('/api/cart', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Please login to view cart' 
+      });
+    }
+
+    const decoded = jwt.verify(token, jwtSecret);
+    const userId = decoded.userId;
+
+    // Check if user exists
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('id', userId)
+      .single();
+    
+    if (userError || !user) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    // Get or create cart
+    let { data: cart, error: cartError } = await supabase
+      .from('carts')
+      .select('*')
+      .eq('user_id', userId)
+      .single();
+    
+    if (cartError && cartError.code === 'PGRST116') {
+      // Cart doesn't exist, create one
+      const { data: newCart, error: createError } = await supabase
+        .from('carts')
+        .insert({
+          user_id: userId,
+          items: [],
+          total_items: 0,
+          total_price: 0,
+          total_savings: 0
+        })
+        .select()
+        .single();
+      
+      if (createError) {
+        console.error('Error creating cart:', createError);
+        return res.status(500).json({ success: false, message: 'Error creating cart' });
+      }
+      cart = newCart;
+    } else if (cartError) {
+      console.error('Error fetching cart:', cartError);
+      return res.status(500).json({ success: false, message: 'Error fetching cart' });
+    }
+
+    res.json({
+      success: true,
+      cart: formatCart(cart)
+    });
+
+  } catch (error) {
+    console.error('Error fetching cart:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error fetching cart',
+      error: error.message 
+    });
+  }
+});
+
+// Add to cart
+app.post('/api/cart/add', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Please login to add to cart' 
+      });
+    }
+
+    const decoded = jwt.verify(token, jwtSecret);
+    const userId = decoded.userId;
+    const { productId, qty = 1 } = req.body;
+
+    if (!productId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Product ID is required' 
+      });
+    }
+
+    // Get product
+    const { data: product, error: productError } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', productId)
+      .single();
+    
+    if (productError || !product) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Product not found' 
+      });
+    }
+
+    if (product.stock <= 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Product is out of stock' 
+      });
+    }
+
+    // Get cart
+    let { data: cart, error: cartError } = await supabase
+      .from('carts')
+      .select('*')
+      .eq('user_id', userId)
+      .single();
+
+    let items = [];
+    if (cart && !cartError) {
+      items = cart.items || [];
+    }
+
+    // Check if item exists
+    const existingIndex = items.findIndex(item => 
+      item.product_id === productId
+    );
+
+    if (existingIndex > -1) {
+      const newQty = items[existingIndex].qty + qty;
+      if (newQty > product.stock) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Not enough stock available' 
+        });
+      }
+      items[existingIndex].qty = newQty;
+    } else {
+      items.push({
+        product_id: product.id,
+        name: product.name,
+        price: product.price,
+        original_price: product.original_price,
+        discount_percent: product.discount_percent || 0,
+        qty: qty,
+        image: product.image || '',
+        image_url: product.image_url || '',
+        stock: product.stock,
+        category: product.category
+      });
+    }
+
+    const totalItems = items.reduce((sum, item) => sum + item.qty, 0);
+    const totalPrice = items.reduce((sum, item) => sum + (item.price * item.qty), 0);
+    const totalSavings = items.reduce((sum, item) => {
+      return sum + ((item.original_price - item.price) * item.qty);
+    }, 0);
+
+    // Upsert cart
+    const { data: updatedCart, error: upsertError } = await supabase
+      .from('carts')
+      .upsert({
+        user_id: userId,
+        items: items,
+        total_items: totalItems,
+        total_price: totalPrice,
+        total_savings: totalSavings,
+        updated_at: new Date().toISOString()
+      }, {
+        onConflict: 'user_id'
+      })
+      .select()
+      .single();
+
+    if (upsertError) {
+      console.error('Error updating cart:', upsertError);
+      return res.status(500).json({ success: false, message: 'Error adding to cart' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Product added to cart',
+      cart: formatCart(updatedCart)
+    });
+
+  } catch (error) {
+    console.error('Error adding to cart:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error adding to cart',
+      error: error.message 
+    });
+  }
+});
+
+// Update cart item quantity
+app.put('/api/cart/update/:productId', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Please login' 
+      });
+    }
+
+    const decoded = jwt.verify(token, jwtSecret);
+    const userId = decoded.userId;
+    const { productId } = req.params;
+    const { qty } = req.body;
+
+    if (!qty || qty < 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Valid quantity is required' 
+      });
+    }
+
+    // Get cart
+    const { data: cart, error: cartError } = await supabase
+      .from('carts')
+      .select('*')
+      .eq('user_id', userId)
+      .single();
+    
+    if (cartError || !cart) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Cart not found' 
+      });
+    }
+
+    let items = cart.items || [];
+    const itemIndex = items.findIndex(item => 
+      item.product_id === productId
+    );
+
+    if (itemIndex === -1) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Item not found in cart' 
+      });
+    }
+
+    if (qty === 0) {
+      items.splice(itemIndex, 1);
+    } else {
+      // Check stock
+      const { data: product, error: productError } = await supabase
+        .from('products')
+        .select('stock')
+        .eq('id', productId)
+        .single();
+      
+      if (product && qty > product.stock) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Not enough stock available' 
+        });
+      }
+      items[itemIndex].qty = qty;
+    }
+
+    const totalItems = items.reduce((sum, item) => sum + item.qty, 0);
+    const totalPrice = items.reduce((sum, item) => sum + (item.price * item.qty), 0);
+    const totalSavings = items.reduce((sum, item) => {
+      return sum + ((item.original_price - item.price) * item.qty);
+    }, 0);
+
+    const { data: updatedCart, error: updateError } = await supabase
+      .from('carts')
+      .update({
+        items: items,
+        total_items: totalItems,
+        total_price: totalPrice,
+        total_savings: totalSavings,
+        updated_at: new Date().toISOString()
+      })
+      .eq('user_id', userId)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error('Error updating cart:', updateError);
+      return res.status(500).json({ success: false, message: 'Error updating cart' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Cart updated',
+      cart: formatCart(updatedCart)
+    });
+
+  } catch (error) {
+    console.error('Error updating cart:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error updating cart',
+      error: error.message 
+    });
+  }
+});
+
+// Remove from cart
+app.delete('/api/cart/remove/:productId', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Please login' 
+      });
+    }
+
+    const decoded = jwt.verify(token, jwtSecret);
+    const userId = decoded.userId;
+    const { productId } = req.params;
+
+    const { data: cart, error: cartError } = await supabase
+      .from('carts')
+      .select('*')
+      .eq('user_id', userId)
+      .single();
+    
+    if (cartError || !cart) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Cart not found' 
+      });
+    }
+
+    let items = cart.items || [];
+    items = items.filter(item => 
+      item.product_id !== productId
+    );
+
+    const totalItems = items.reduce((sum, item) => sum + item.qty, 0);
+    const totalPrice = items.reduce((sum, item) => sum + (item.price * item.qty), 0);
+    const totalSavings = items.reduce((sum, item) => {
+      return sum + ((item.original_price - item.price) * item.qty);
+    }, 0);
+
+    const { data: updatedCart, error: updateError } = await supabase
+      .from('carts')
+      .update({
+        items: items,
+        total_items: totalItems,
+        total_price: totalPrice,
+        total_savings: totalSavings,
+        updated_at: new Date().toISOString()
+      })
+      .eq('user_id', userId)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error('Error updating cart:', updateError);
+      return res.status(500).json({ success: false, message: 'Error removing from cart' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Item removed from cart',
+      cart: formatCart(updatedCart)
+    });
+
+  } catch (error) {
+    console.error('Error removing from cart:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error removing from cart',
+      error: error.message 
+    });
+  }
+});
+
+// Clear cart
+app.delete('/api/cart/clear', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Please login' 
+      });
+    }
+
+    const decoded = jwt.verify(token, jwtSecret);
+    const userId = decoded.userId;
+
+    const { error } = await supabase
+      .from('carts')
+      .update({
+        items: [],
+        total_items: 0,
+        total_price: 0,
+        total_savings: 0,
+        updated_at: new Date().toISOString()
+      })
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error('Error clearing cart:', error);
+      return res.status(500).json({ success: false, message: 'Error clearing cart' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Cart cleared successfully'
+    });
+
+  } catch (error) {
+    console.error('Error clearing cart:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error clearing cart',
+      error: error.message 
+    });
+  }
+});
+
+// Sync local cart to server
+app.post('/api/cart/sync', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Please login' 
+      });
+    }
+
+    const decoded = jwt.verify(token, jwtSecret);
+    const userId = decoded.userId;
+    const { items } = req.body;
+
+    if (!items || !Array.isArray(items)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid cart items' 
+      });
+    }
+
+    const processedItems = [];
+    for (const item of items) {
+      const { data: product, error: productError } = await supabase
+        .from('products')
+        .select('*')
+        .eq('id', item._id)
+        .single();
+      
+      if (productError || !product) continue;
+
+      const qty = Math.min(item.qty, product.stock);
+      if (qty <= 0) continue;
+
+      processedItems.push({
+        product_id: product.id,
+        name: product.name,
+        price: product.price,
+        original_price: product.original_price,
+        discount_percent: product.discount_percent || 0,
+        qty: qty,
+        image: product.image || '',
+        image_url: product.image_url || '',
+        stock: product.stock,
+        category: product.category
+      });
+    }
+
+    const totalItems = processedItems.reduce((sum, item) => sum + item.qty, 0);
+    const totalPrice = processedItems.reduce((sum, item) => sum + (item.price * item.qty), 0);
+    const totalSavings = processedItems.reduce((sum, item) => {
+      return sum + ((item.original_price - item.price) * item.qty);
+    }, 0);
+
+    const { data: cart, error: upsertError } = await supabase
+      .from('carts')
+      .upsert({
+        user_id: userId,
+        items: processedItems,
+        total_items: totalItems,
+        total_price: totalPrice,
+        total_savings: totalSavings,
+        updated_at: new Date().toISOString()
+      }, {
+        onConflict: 'user_id'
+      })
+      .select()
+      .single();
+
+    if (upsertError) {
+      console.error('Error syncing cart:', upsertError);
+      return res.status(500).json({ success: false, message: 'Error syncing cart' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Cart synced successfully',
+      cart: formatCart(cart)
+    });
+
+  } catch (error) {
+    console.error('Error syncing cart:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error syncing cart',
+      error: error.message 
+    });
+  }
+});
+
+// =============================================
+// ✅ ORDER ROUTES - FULLY FIXED
+// =============================================
+
+// Create order - FIXED with full product details
+app.post('/api/orders', async (req, res) => {
+  try {
+    console.log('📦 Creating order...');
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+
+    if (!req.body || Object.keys(req.body).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Request body is empty'
+      });
+    }
+
+    const { items, total, paymentMethod, referenceId, delivery } = req.body;
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cart is empty'
+      });
+    }
+
+    if (!total || isNaN(total) || total <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid total amount'
+      });
+    }
+
+    if (!delivery || typeof delivery !== 'object') {
+      return res.status(400).json({
+        success: false,
+        message: 'Delivery details are required'
+      });
+    }
+
+    const requiredFields = ['fullName', 'phone', 'address', 'city', 'state', 'pincode'];
+    const missingFields = requiredFields.filter(field => !String(delivery[field] || '').trim());
+
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Missing required fields: ${missingFields.join(', ')}`
+      });
+    }
+
+    let userId = null;
+    let userName = 'Guest';
+    let userEmail = '';
+
+    const authHeader = req.headers.authorization;
+    console.log('Auth header:', authHeader ? 'Present' : 'Missing');
+
+    if (authHeader) {
+      try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, jwtSecret);
+        userId = decoded.userId;
+        
+        // ✅ FIRST: Check admins table
+        const { data: admin, error: adminError } = await supabase
+          .from('admins')
+          .select('email')
+          .eq('id', userId)
+          .single();
+        
+        if (!adminError && admin) {
+          userName = 'Admin';
+          userEmail = admin.email || '';
+          console.log(`👤 Admin ordering: ${userName} (${userEmail})`);
+          // ✅ Admin case: userId = null (FK violation से बचने के लिए)
+          userId = null;
+        } else {
+          // ✅ SECOND: Check users table
+          const { data: user, error: userError } = await supabase
+            .from('users')
+            .select('name, email')
+            .eq('id', userId)
+            .single();
+          
+          if (!userError && user) {
+            userName = user.name || 'Guest';
+            userEmail = user.email || '';
+            console.log(`👤 User: ${userName} (${userEmail})`);
+          }
+        }
+      } catch (err) {
+        console.log('⚠️ Token verification failed, proceeding as guest:', err.message);
+      }
+    }
+
+    // ✅ FIX: Order items with FULL product details
+    const orderItems = items.map(item => ({
+      product_id: item._id || item.productId || null,
+      name: String(item.name || 'Product'),
+      price: Number(item.price) || 0,
+      qty: Number(item.qty) || 1,
+      image: String(item.image || item.imageUrl || ''),
+      // ✅ Add these extra fields for better display
+      originalPrice: Number(item.originalPrice) || Number(item.original_price) || 0,
+      discountPercent: Number(item.discountPercent) || Number(item.discount_percent) || 0,
+      category: String(item.category || '')
+    }));
+
+    const orderData = {
+      user_id: userId,  // ✅ Admin के case में null होगा
+      user_name: userName,
+      user_email: userEmail,
+      items: orderItems,
+      total: Number(total),
+      payment_method: paymentMethod || 'cod',
+      reference_id: referenceId || null,
+      delivery: {
+        fullName: String(delivery.fullName || '').trim(),
+        phone: String(delivery.phone || '').trim(),
+        email: String(delivery.email || '').trim(),
+        address: String(delivery.address || '').trim(),
+        landmark: String(delivery.landmark || '').trim(),
+        city: String(delivery.city || '').trim(),
+        state: String(delivery.state || '').trim(),
+        pincode: String(delivery.pincode || '').trim(),
+        note: String(delivery.note || '').trim()
+      },
+      status: 'Pending',
+      status_history: [{
+        status: 'Pending',
+        timestamp: new Date().toISOString(),
+        updatedBy: 'System'
+      }]
+    };
+
+    console.log('💾 Order data to save:', JSON.stringify(orderData, null, 2));
+
+    const { data: order, error: orderError } = await supabase
+      .from('orders')
+      .insert(orderData)
+      .select()
+      .single();
+
+    if (orderError) {
+      console.error('Supabase insert error:', orderError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to place order',
+        error: orderError.message
+      });
+    }
+
+    // Clear cart after order placement
+    if (userId) {
+      const { error: cartError } = await supabase
+        .from('carts')
+        .update({
+          items: [],
+          total_items: 0,
+          total_price: 0,
+          total_savings: 0,
+          updated_at: new Date().toISOString()
+        })
+        .eq('user_id', userId);
+      
+      if (!cartError) {
+        console.log('🗑️ Cart cleared after order');
+      }
+    }
+
+    console.log(`✅ Order placed successfully! ID: ${order.id}`);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Order placed successfully',
+      order: formatOrder(order)
+    });
+
+  } catch (error) {
+    console.error('❌ Error creating order:', error);
+    console.error('Error stack:', error.stack);
+    
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to place order',
+      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// ✅ FIXED: Get user orders - Admin can see ALL orders
+app.get('/api/orders', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'Please login to view orders' });
+    }
+    
+    const decoded = jwt.verify(token, jwtSecret);
+    const userId = decoded.userId;
+    
+    // ✅ Check if user is admin
+    const { data: admin, error: adminError } = await supabase
+      .from('admins')
+      .select('id')
+      .eq('id', userId)
+      .single();
+    
+    let query = supabase.from('orders').select('*');
+    
+    if (admin) {
+      // ✅ Admin - सभी orders देखें
+      console.log('👑 Admin viewing all orders');
+      query = query.order('created_at', { ascending: false });
+    } else {
+      // ✅ User - सिर्फ अपने orders
+      console.log('👤 User viewing own orders');
+      query = query.eq('user_id', userId).order('created_at', { ascending: false });
+    }
+    
+    const { data: orders, error } = await query;
+    
+    if (error) {
+      console.error('Error fetching orders:', error);
+      return res.status(500).json({ success: false, message: 'Error fetching orders' });
+    }
+    
+    console.log(`📊 Found ${orders?.length || 0} orders`);
+    res.json({ success: true, orders: orders.map(formatOrder) });
+  } catch (error) {
+    console.error('Error fetching orders:', error);
+    res.status(500).json({ success: false, message: 'Error fetching orders' });
+  }
+});
+
+// =============================================
+// ✅ ORDER TRACKING - FIXED FOR ADMINS TABLE
+// =============================================
+app.get('/api/orders/:id/tracking', async (req, res) => {
+  try {
+    const orderId = req.params.id;
+    
+    const { data: order, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+    
+    if (error || !order) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+    
+    const token = req.headers.authorization?.split(' ')[1];
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, jwtSecret);
+        const userId = decoded.userId;
+        
+        // ✅ FIX: Check BOTH users table AND admins table
+        const { data: user, error: userError } = await supabase
+          .from('users')
+          .select('role')
+          .eq('id', userId)
+          .single();
+        
+        const { data: admin, error: adminError } = await supabase
+          .from('admins')
+          .select('id')
+          .eq('id', userId)
+          .single();
+        
+        // ✅ Check if user is admin OR order owner
+        const isAdmin = (user && user.role === 'admin') || admin;
+        const isOwner = order.user_id === userId;
+        
+        if (isAdmin || isOwner) {
+          const timeline = getOrderTimeline(order);
+          
+          return res.json({
+            success: true,
+            tracking: {
+              orderId: order.id,
+              currentStatus: order.status,
+              createdAt: order.created_at,
+              items: order.items,
+              total: order.total,
+              delivery: order.delivery,
+              timeline: timeline,
+              statusHistory: order.status_history || []
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Token verification error:', err);
+      }
+    }
+    
+    return res.status(403).json({ success: false, message: 'Unauthorized to view this order' });
+    
+  } catch (error) {
+    console.error('Error fetching tracking:', error);
+    res.status(500).json({ success: false, message: 'Error fetching tracking details' });
+  }
+});
+
+// Helper function for order timeline
+function getOrderTimeline(order) {
+  const timeline = [];
+  
+  timeline.push({
+    status: 'Order Placed',
+    description: 'Order has been placed successfully',
+    timestamp: order.created_at,
+    completed: true,
+    icon: '🛒'
+  });
+  
+  const statusMap = {
+    'Confirmed': { icon: '✅', description: 'Your order has been confirmed by the seller' },
+    'Shipped': { icon: '🚚', description: 'Your order has been shipped and is on the way' },
+    'Delivered': { icon: '📦', description: 'Your order has been delivered successfully' }
+  };
+  
+  const statuses = ['Confirmed', 'Shipped', 'Delivered'];
+  let isCompleted = true;
+  const createdDate = new Date(order.created_at);
+  
+  for (const status of statuses) {
+    const isStatusCompleted = order.status === status || 
+      (status === 'Confirmed' && ['Shipped', 'Delivered'].includes(order.status)) ||
+      (status === 'Shipped' && ['Delivered'].includes(order.status));
+    
+    if (!isStatusCompleted && isCompleted) {
+      isCompleted = false;
+    }
+    
+    let timestamp = null;
+    if (order.status_history) {
+      const history = order.status_history.find(h => h.status === status);
+      if (history) {
+        timestamp = history.timestamp;
+      }
+    }
+    
+    if (isStatusCompleted && !timestamp) {
+      const baseTime = new Date(createdDate.getTime());
+      if (status === 'Confirmed') baseTime.setHours(baseTime.getHours() + 1);
+      else if (status === 'Shipped') baseTime.setHours(baseTime.getHours() + 24);
+      else if (status === 'Delivered') baseTime.setHours(baseTime.getHours() + 48);
+      timestamp = baseTime.toISOString();
+    }
+    
+    timeline.push({
+      status: status,
+      description: statusMap[status].description,
+      timestamp: timestamp,
+      completed: isStatusCompleted && isCompleted,
+      icon: statusMap[status].icon
+    });
+  }
+  
+  return timeline;
+}
+
+// =============================================
+// ✅ UPDATE ORDER STATUS - FIXED FOR ADMINS TABLE
+// =============================================
+app.patch('/api/orders/:id/status', async (req, res) => {
+  try {
+    const { status } = req.body;
+    const orderId = req.params.id;
+    
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    
+    let decoded;
+    try {
+      decoded = jwt.verify(token, jwtSecret);
+    } catch (err) {
+      return res.status(401).json({ success: false, message: 'Invalid token' });
+    }
+    
+    const userId = decoded.userId;
+    
+    // ✅ FIX: Check BOTH users table AND admins table
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('role, name')
+      .eq('id', userId)
+      .single();
+    
+    const { data: admin, error: adminError } = await supabase
+      .from('admins')
+      .select('id')
+      .eq('id', userId)
+      .single();
+    
+    // ✅ Check if user is admin (either in users table with role admin OR in admins table)
+    const isAdmin = (user && user.role === 'admin') || admin;
+    
+    if (!isAdmin) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Admin access required' 
+      });
+    }
+    
+    const adminName = user?.name || 'Admin';
+    
+    const validStatuses = ['Pending', 'Confirmed', 'Shipped', 'Delivered', 'Cancelled'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status' });
+    }
+    
+    // Get current order
+    const { data: order, error: fetchError } = await supabase
+      .from('orders')
+      .select('status, status_history')
+      .eq('id', orderId)
+      .single();
+    
+    if (fetchError || !order) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+    
+    const statusHistory = order.status_history || [];
+    statusHistory.push({
+      status: status,
+      timestamp: new Date().toISOString(),
+      updatedBy: adminName
+    });
+    
+    const { data: updatedOrder, error: updateError } = await supabase
+      .from('orders')
+      .update({
+        status: status,
+        status_history: statusHistory
+      })
+      .eq('id', orderId)
+      .select()
+      .single();
+    
+    if (updateError) {
+      console.error('Error updating order status:', updateError);
+      return res.status(500).json({ success: false, message: 'Error updating order status' });
+    }
+    
+    const timeline = getOrderTimeline(updatedOrder);
+    
+    res.json({ 
+      success: true, 
+      message: 'Order status updated successfully',
+      order: formatOrder(updatedOrder),
+      tracking: { timeline }
+    });
+    
+  } catch (error) {
+    console.error('Error updating order status:', error);
+    res.status(500).json({ success: false, message: 'Error updating order status' });
+  }
+});
+
+// =============================================
+// ✅ USER CANCEL ORDER
+// =============================================
+app.patch('/api/orders/:id/cancel', async (req, res) => {
+  try {
+    const orderId = req.params.id;
+    
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Authentication required' 
+      });
+    }
+    
+    let decoded;
+    try {
+      decoded = jwt.verify(token, jwtSecret);
+    } catch (err) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid token' 
+      });
+    }
+    
+    const userId = decoded.userId;
+    
+    const { data: order, error: fetchError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+    
+    if (fetchError || !order) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Order not found' 
+      });
+    }
+    
+    const { data: admin, error: adminError } = await supabase
+      .from('admins')
+      .select('id')
+      .eq('id', userId)
+      .single();
+    
+    const isAdmin = !adminError && admin;
+    const isOwner = order.user_id === userId;
+    
+    if (!isAdmin && !isOwner) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'You are not authorized to cancel this order' 
+      });
+    }
+    
+    const cancellableStatuses = ['Pending', 'Confirmed'];
+    if (!cancellableStatuses.includes(order.status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Order cannot be cancelled. Current status: ${order.status}` 
+      });
+    }
+    
+    const statusHistory = order.status_history || [];
+    statusHistory.push({
+      status: 'Cancelled',
+      timestamp: new Date().toISOString(),
+      updatedBy: isAdmin ? 'Admin' : 'User'
+    });
+    
+    const { data: updatedOrder, error: updateError } = await supabase
+      .from('orders')
+      .update({
+        status: 'Cancelled',
+        status_history: statusHistory,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', orderId)
+      .select()
+      .single();
+    
+    if (updateError) {
+      console.error('Error cancelling order:', updateError);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Failed to cancel order' 
+      });
+    }
+    
+    console.log(`✅ Order ${orderId} cancelled by ${isAdmin ? 'Admin' : 'User'}`);
+    
+    res.json({
+      success: true,
+      message: 'Order cancelled successfully',
+      order: formatOrder(updatedOrder)
+    });
+    
+  } catch (error) {
+    console.error('❌ Error cancelling order:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error while cancelling order' 
+    });
+  }
+});
+
+// =============================================
+// ✅ ADMIN ORDERS - FIXED FOR ADMINS TABLE
+// =============================================
+app.get('/api/admin/orders', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    
+    let decoded;
+    try {
+      decoded = jwt.verify(token, jwtSecret);
+    } catch (err) {
+      return res.status(401).json({ success: false, message: 'Invalid token' });
+    }
+    
+    const userId = decoded.userId;
+    
+    // ✅ FIX: Check BOTH users table AND admins table
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', userId)
+      .single();
+    
+    const { data: admin, error: adminError } = await supabase
+      .from('admins')
+      .select('id')
+      .eq('id', userId)
+      .single();
+    
+    // ✅ Check if user is admin
+    const isAdmin = (user && user.role === 'admin') || admin;
+    
+    if (!isAdmin) {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    
+    const { status, search, page = 1, limit = 10 } = req.query;
+    
+    let query = supabase.from('orders').select('*', { count: 'exact' });
+    
+    if (status && status !== 'all') {
+      query = query.eq('status', status);
+    }
+    
+    if (search) {
+      query = query.or(`user_name.ilike.%${search}%,user_email.ilike.%${search}%,delivery->>phone.ilike.%${search}%`);
+    }
+    
+    const skip = (page - 1) * limit;
+    const { data: orders, error, count } = await query
+      .order('created_at', { ascending: false })
+      .range(skip, skip + parseInt(limit) - 1);
+    
+    if (error) {
+      console.error('Error fetching admin orders:', error);
+      return res.status(500).json({ success: false, message: 'Error fetching orders' });
+    }
+    
+    const { data: statusCounts, error: countError } = await supabase
+      .from('orders')
+      .select('status', { count: 'exact', head: false });
+    
+    const counts = {
+      all: 0,
+      Pending: 0,
+      Confirmed: 0,
+      Shipped: 0,
+      Delivered: 0,
+      Cancelled: 0
+    };
+    
+    if (!countError && statusCounts) {
+      counts.all = statusCounts.length;
+      statusCounts.forEach(item => {
+        if (counts.hasOwnProperty(item.status)) {
+          counts[item.status] = (counts[item.status] || 0) + 1;
+        }
+      });
+    }
+    
+    res.json({
+      success: true,
+      orders: orders.map(formatOrder),
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: count || orders.length,
+        pages: Math.ceil((count || orders.length) / limit)
+      },
+      counts
+    });
+    
+  } catch (error) {
+    console.error('Error fetching admin orders:', error);
+    res.status(500).json({ success: false, message: 'Error fetching orders' });
+  }
+});
+
+// =============================================
+// TEST ROUTES
+// =============================================
+
+// Test order route
+app.post('/api/orders/test', (req, res) => {
+  console.log('✅ Order test route hit!');
+  console.log('Body:', req.body);
+  res.json({ success: true, message: 'Order route working!' });
+});
+
+// =============================================
+// HEALTH CHECK
+// =============================================
+app.get('/health', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('products')
+      .select('id')
+      .limit(1);
+    
+    res.json({
+      status: 'OK',
+      message: 'Backend is running with Supabase',
+      timestamp: new Date().toISOString(),
+      supabase: error ? 'Connected but error' : 'Connected',
+      database: 'Supabase PostgreSQL',
+      environment: process.env.NODE_ENV || 'development'
+    });
+  } catch (error) {
+    res.json({
+      status: 'OK',
+      message: 'Backend is running',
+      timestamp: new Date().toISOString(),
+      supabase: 'Connection failed',
+      database: 'Supabase PostgreSQL',
+      environment: process.env.NODE_ENV || 'development'
+    });
+  }
+});
+
+app.get('/', (req, res) => {
+  res.json({
+    name: 'AteliMarket API',
+    version: '3.0.0',
+    status: 'Running with Supabase',
+    database: 'Supabase PostgreSQL',
+    endpoints: {
+      health: '/health',
+      products: '/api/products',
+      auth: '/api/auth',
+      cart: '/api/cart',
+      orders: '/api/orders',
+      tracking: '/api/orders/:id/tracking',
+      test: '/api/orders/test',
+      verify: '/api/auth/verify',
+      cancel: '/api/orders/:id/cancel',
+      adminOrders: '/api/admin/orders'
+    },
+    note: 'Image URLs are used instead of file uploads, Cart saved in Supabase PostgreSQL'
+  });
+});
+
+// =============================================
+// ERROR HANDLING
+// =============================================
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: `Route ${req.url} not found` });
+});
+
+app.use((err, req, res, next) => {
+  console.error('❌ Error:', err);
+  res.status(err.status || 500).json({ 
+    success: false, 
+    message: err.message || 'Internal server error' 
+  });
+});
+
+// =============================================
+// START SERVER
+// =============================================
+app.listen(port, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${port}`);
+  console.log(`📍 Health check: http://localhost:${port}/health`);
+  console.log(`📁 Uploads folder: ${uploadsDir}`);
+  console.log(`✅ Image URL mode: Enabled (No file uploads)`);
+  console.log(`🛒 Cart saved in Supabase PostgreSQL`);
+  console.log(`🔑 JWT Secret: ${jwtSecret ? '✅ Set' : '❌ Not Set'}`);
+  console.log(`☁️  Supabase: ${supabaseUrl ? '✅ Connected' : '❌ Not Set'}`);
+  console.log(`📊 Database: Supabase PostgreSQL`);
+  console.log(`✅ MongoDB has been completely removed!`);
+});

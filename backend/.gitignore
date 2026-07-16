@@ -1,0 +1,23 @@
+# Node.js
+node_modules/
+npm-debug.log*
+package-lock.json
+yarn.lock
+.env
+.env.local
+
+# Build files
+dist/
+build/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Supabase (if has sensitive data)
+*.supabase
