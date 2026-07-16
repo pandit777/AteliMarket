@@ -1565,7 +1565,7 @@ function getOrderTimeline(order) {
   return timeline;
 }
 
-// Update order status
+// Update order status (Admin only)
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
@@ -1643,6 +1643,118 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   } catch (error) {
     console.error('Error updating order status:', error);
     res.status(500).json({ success: false, message: 'Error updating order status' });
+  }
+});
+
+// =============================================
+// ✅ USER CANCEL ORDER - New Route
+// =============================================
+app.patch('/api/orders/:id/cancel', async (req, res) => {
+  try {
+    const orderId = req.params.id;
+    
+    // ✅ Check authentication
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Authentication required' 
+      });
+    }
+    
+    let decoded;
+    try {
+      decoded = jwt.verify(token, jwtSecret);
+    } catch (err) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid token' 
+      });
+    }
+    
+    const userId = decoded.userId;
+    
+    // ✅ Get order details
+    const { data: order, error: fetchError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+    
+    if (fetchError || !order) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Order not found' 
+      });
+    }
+    
+    // ✅ Check if user owns this order OR is admin
+    const { data: admin, error: adminError } = await supabase
+      .from('admins')
+      .select('id')
+      .eq('id', userId)
+      .single();
+    
+    const isAdmin = !adminError && admin;
+    const isOwner = order.user_id === userId;
+    
+    if (!isAdmin && !isOwner) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'You are not authorized to cancel this order' 
+      });
+    }
+    
+    // ✅ Check if order can be cancelled (only Pending or Confirmed)
+    const cancellableStatuses = ['Pending', 'Confirmed'];
+    if (!cancellableStatuses.includes(order.status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Order cannot be cancelled. Current status: ${order.status}` 
+      });
+    }
+    
+    // ✅ Update order status to Cancelled
+    const statusHistory = order.status_history || [];
+    statusHistory.push({
+      status: 'Cancelled',
+      timestamp: new Date().toISOString(),
+      updatedBy: isAdmin ? 'Admin' : 'User'
+    });
+    
+    const { data: updatedOrder, error: updateError } = await supabase
+      .from('orders')
+      .update({
+        status: 'Cancelled',
+        status_history: statusHistory,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', orderId)
+      .select()
+      .single();
+    
+    if (updateError) {
+      console.error('Error cancelling order:', updateError);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Failed to cancel order' 
+      });
+    }
+    
+    console.log(`✅ Order ${orderId} cancelled by ${isAdmin ? 'Admin' : 'User'}`);
+    
+    res.json({
+      success: true,
+      message: 'Order cancelled successfully',
+      order: formatOrder(updatedOrder)
+    });
+    
+  } catch (error) {
+    console.error('❌ Error cancelling order:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error while cancelling order' 
+    });
   }
 });
 
@@ -1790,7 +1902,8 @@ app.get('/', (req, res) => {
       orders: '/api/orders',
       tracking: '/api/orders/:id/tracking',
       test: '/api/orders/test',
-      verify: '/api/auth/verify'
+      verify: '/api/auth/verify',
+      cancel: '/api/orders/:id/cancel'
     },
     note: 'Image URLs are used instead of file uploads, Cart saved in Supabase PostgreSQL'
   });
