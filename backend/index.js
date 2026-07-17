@@ -1448,7 +1448,9 @@ app.get('/api/orders', async (req, res) => {
   }
 });
 
-// Get order tracking
+// =============================================
+// ✅ ORDER TRACKING - FIXED FOR ADMINS TABLE
+// =============================================
 app.get('/api/orders/:id/tracking', async (req, res) => {
   try {
     const orderId = req.params.id;
@@ -1467,14 +1469,26 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
     if (token) {
       try {
         const decoded = jwt.verify(token, jwtSecret);
+        const userId = decoded.userId;
         
+        // ✅ FIX: Check BOTH users table AND admins table
         const { data: user, error: userError } = await supabase
           .from('users')
           .select('role')
-          .eq('id', decoded.userId)
+          .eq('id', userId)
           .single();
         
-        if (user && (user.role === 'admin' || order.user_id === decoded.userId)) {
+        const { data: admin, error: adminError } = await supabase
+          .from('admins')
+          .select('id')
+          .eq('id', userId)
+          .single();
+        
+        // ✅ Check if user is admin OR order owner
+        const isAdmin = (user && user.role === 'admin') || admin;
+        const isOwner = order.user_id === userId;
+        
+        if (isAdmin || isOwner) {
           const timeline = getOrderTimeline(order);
           
           return res.json({
