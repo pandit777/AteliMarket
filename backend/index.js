@@ -85,6 +85,18 @@ app.use('/uploads', express.static(uploadsDir, {
 console.log(`📁 Uploads directory: ${uploadsDir}`);
 
 // =============================================
+// DELIVERY CHARGE CALCULATION
+// =============================================
+const calculateDeliveryCharge = (subtotal) => {
+  // ✅ Free delivery on ₹199 or more
+  if (subtotal >= 199) {
+    return 0;
+  }
+  // ✅ ₹20 delivery charge for orders below ₹199
+  return 20;
+};
+
+// =============================================
 // HELPER FUNCTIONS
 // =============================================
 
@@ -1214,10 +1226,10 @@ app.post('/api/cart/sync', async (req, res) => {
 });
 
 // =============================================
-// ✅ ORDER ROUTES - FULLY FIXED
+// ✅ ORDER ROUTES - FULLY FIXED WITH DELIVERY CHARGE
 // =============================================
 
-// Create order - FIXED with full product details
+// Create order - FIXED with full product details and delivery charge
 app.post('/api/orders', async (req, res) => {
   try {
     console.log('📦 Creating order...');
@@ -1230,7 +1242,7 @@ app.post('/api/orders', async (req, res) => {
       });
     }
 
-    const { items, total, paymentMethod, referenceId, delivery } = req.body;
+    const { items, total, subtotal, deliveryCharge, paymentMethod, referenceId, delivery } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
@@ -1239,7 +1251,11 @@ app.post('/api/orders', async (req, res) => {
       });
     }
 
-    if (!total || isNaN(total) || total <= 0) {
+    // ✅ Calculate delivery charge based on subtotal
+    const calculatedDeliveryCharge = calculateDeliveryCharge(subtotal || 0);
+    const finalTotal = (subtotal || 0) + calculatedDeliveryCharge;
+
+    if (!finalTotal || isNaN(finalTotal) || finalTotal <= 0) {
       return res.status(400).json({
         success: false,
         message: 'Invalid total amount'
@@ -1287,7 +1303,6 @@ app.post('/api/orders', async (req, res) => {
           userName = 'Admin';
           userEmail = admin.email || '';
           console.log(`👤 Admin ordering: ${userName} (${userEmail})`);
-          // ✅ Admin case: userId = null (FK violation से बचने के लिए)
           userId = null;
         } else {
           // ✅ SECOND: Check users table
@@ -1315,18 +1330,19 @@ app.post('/api/orders', async (req, res) => {
       price: Number(item.price) || 0,
       qty: Number(item.qty) || 1,
       image: String(item.image || item.imageUrl || ''),
-      // ✅ Add these extra fields for better display
       originalPrice: Number(item.originalPrice) || Number(item.original_price) || 0,
       discountPercent: Number(item.discountPercent) || Number(item.discount_percent) || 0,
       category: String(item.category || '')
     }));
 
     const orderData = {
-      user_id: userId,  // ✅ Admin के case में null होगा
+      user_id: userId,
       user_name: userName,
       user_email: userEmail,
       items: orderItems,
-      total: Number(total),
+      subtotal: Number(subtotal) || 0,
+      delivery_charge: calculatedDeliveryCharge,
+      total: finalTotal,
       payment_method: paymentMethod || 'cod',
       reference_id: referenceId || null,
       delivery: {
@@ -1349,6 +1365,7 @@ app.post('/api/orders', async (req, res) => {
     };
 
     console.log('💾 Order data to save:', JSON.stringify(orderData, null, 2));
+    console.log(`📦 Delivery Charge: ₹${calculatedDeliveryCharge} (${calculatedDeliveryCharge === 0 ? 'FREE' : '₹20'})`);
 
     const { data: order, error: orderError } = await supabase
       .from('orders')
@@ -1384,6 +1401,7 @@ app.post('/api/orders', async (req, res) => {
     }
 
     console.log(`✅ Order placed successfully! ID: ${order.id}`);
+    console.log(`💰 Total: ₹${finalTotal} (Subtotal: ₹${subtotal || 0} + Delivery: ₹${calculatedDeliveryCharge})`);
     
     res.status(201).json({
       success: true,
@@ -1424,11 +1442,9 @@ app.get('/api/orders', async (req, res) => {
     let query = supabase.from('orders').select('*');
     
     if (admin) {
-      // ✅ Admin - सभी orders देखें
       console.log('👑 Admin viewing all orders');
       query = query.order('created_at', { ascending: false });
     } else {
-      // ✅ User - सिर्फ अपने orders
       console.log('👤 User viewing own orders');
       query = query.eq('user_id', userId).order('created_at', { ascending: false });
     }
@@ -1471,7 +1487,6 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
         const decoded = jwt.verify(token, jwtSecret);
         const userId = decoded.userId;
         
-        // ✅ FIX: Check BOTH users table AND admins table
         const { data: user, error: userError } = await supabase
           .from('users')
           .select('role')
@@ -1484,7 +1499,6 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
           .eq('id', userId)
           .single();
         
-        // ✅ Check if user is admin OR order owner
         const isAdmin = (user && user.role === 'admin') || admin;
         const isOwner = order.user_id === userId;
         
@@ -1498,6 +1512,8 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
               currentStatus: order.status,
               createdAt: order.created_at,
               items: order.items,
+              subtotal: order.subtotal || 0,
+              deliveryCharge: order.delivery_charge || 0,
               total: order.total,
               delivery: order.delivery,
               timeline: timeline,
@@ -1599,7 +1615,6 @@ app.patch('/api/orders/:id/status', async (req, res) => {
     
     const userId = decoded.userId;
     
-    // ✅ FIX: Check BOTH users table AND admins table
     const { data: user, error: userError } = await supabase
       .from('users')
       .select('role, name')
@@ -1612,7 +1627,6 @@ app.patch('/api/orders/:id/status', async (req, res) => {
       .eq('id', userId)
       .single();
     
-    // ✅ Check if user is admin (either in users table with role admin OR in admins table)
     const isAdmin = (user && user.role === 'admin') || admin;
     
     if (!isAdmin) {
@@ -1629,7 +1643,6 @@ app.patch('/api/orders/:id/status', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid status' });
     }
     
-    // Get current order
     const { data: order, error: fetchError } = await supabase
       .from('orders')
       .select('status, status_history')
@@ -1801,7 +1814,6 @@ app.get('/api/admin/orders', async (req, res) => {
     
     const userId = decoded.userId;
     
-    // ✅ FIX: Check BOTH users table AND admins table
     const { data: user, error: userError } = await supabase
       .from('users')
       .select('role')
@@ -1814,7 +1826,6 @@ app.get('/api/admin/orders', async (req, res) => {
       .eq('id', userId)
       .single();
     
-    // ✅ Check if user is admin
     const isAdmin = (user && user.role === 'admin') || admin;
     
     if (!isAdmin) {
@@ -1843,7 +1854,6 @@ app.get('/api/admin/orders', async (req, res) => {
       return res.status(500).json({ success: false, message: 'Error fetching orders' });
     }
     
-    // Get status counts
     const { data: statusCounts, error: countError } = await supabase
       .from('orders')
       .select('status', { count: 'exact', head: false });
