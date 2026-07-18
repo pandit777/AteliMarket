@@ -41,9 +41,8 @@ const allowedOrigins = [
   'https://www.atelimarket.shop',
   'http://atelimarket.shop',
   'http://www.atelimarket.shop',
-  'https://atelimarket-frontend.onrender.com',
-  'https://atelimarket-backend.onrender.com',
-  'https://atelimarket.onrender.com',
+  'https://atelimarket-frontend-xzjb.onrender.com',
+  'https://atelimarket-backend-e46c.onrender.com',
   '*.onrender.com'
 ];
 
