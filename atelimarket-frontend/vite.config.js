@@ -9,7 +9,7 @@ export default defineConfig({
     allowedHosts: [
       'atelimarket.shop',
       'www.atelimarket.shop',
-      'atelimarket-frontend.onrender.com',
+      'atelimarket-frontend-xzjb.onrender.com',
       '.onrender.com'
     ]
   },
@@ -19,7 +19,7 @@ export default defineConfig({
     allowedHosts: [
       'atelimarket.shop',
       'www.atelimarket.shop',
-      'atelimarket-frontend.onrender.com',
+      'atelimarket-frontend-xzjb.onrender.com',
       '.onrender.com'
     ]
   }
