@@ -5,8 +5,8 @@ import axios from 'axios';
 // =============================================
 // ✅ API URLs - PRODUCTION (Render Backend)
 // =============================================
-const API_URL = 'https://atelimarket-backend.onrender.com/api';
-const AUTH_URL = 'https://atelimarket-backend.onrender.com/api/auth';
+const API_URL = 'https://atelimarket-backend-e46c.onrender.com/api';
+const AUTH_URL = 'https://atelimarket-backend-e46c.onrender.com/api/auth';
 
 // =============================================
 // IMAGE URL BUILDER
