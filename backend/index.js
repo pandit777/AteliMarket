@@ -1225,10 +1225,10 @@ app.post('/api/cart/sync', async (req, res) => {
 });
 
 // =============================================
-// ✅ ORDER ROUTES - FULLY FIXED WITH DELIVERY CHARGE
+// ✅ ORDER ROUTES - FULLY FIXED (removed subtotal & delivery_charge)
 // =============================================
 
-// Create order - FIXED with full product details and delivery charge
+// Create order - FIXED without subtotal & delivery_charge
 app.post('/api/orders', async (req, res) => {
   try {
     console.log('📦 Creating order...');
@@ -1241,7 +1241,7 @@ app.post('/api/orders', async (req, res) => {
       });
     }
 
-    const { items, total, subtotal, deliveryCharge, paymentMethod, referenceId, delivery } = req.body;
+    const { items, total, paymentMethod, referenceId, delivery } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
@@ -1250,11 +1250,7 @@ app.post('/api/orders', async (req, res) => {
       });
     }
 
-    // ✅ Calculate delivery charge based on subtotal
-    const calculatedDeliveryCharge = calculateDeliveryCharge(subtotal || 0);
-    const finalTotal = (subtotal || 0) + calculatedDeliveryCharge;
-
-    if (!finalTotal || isNaN(finalTotal) || finalTotal <= 0) {
+    if (!total || isNaN(total) || total <= 0) {
       return res.status(400).json({
         success: false,
         message: 'Invalid total amount'
@@ -1334,14 +1330,13 @@ app.post('/api/orders', async (req, res) => {
       category: String(item.category || '')
     }));
 
+    // ✅ Delivery charge is already included in total from frontend
     const orderData = {
       user_id: userId,
       user_name: userName,
       user_email: userEmail,
       items: orderItems,
-      subtotal: Number(subtotal) || 0,
-      delivery_charge: calculatedDeliveryCharge,
-      total: finalTotal,
+      total: Number(total),
       payment_method: paymentMethod || 'cod',
       reference_id: referenceId || null,
       delivery: {
@@ -1364,7 +1359,6 @@ app.post('/api/orders', async (req, res) => {
     };
 
     console.log('💾 Order data to save:', JSON.stringify(orderData, null, 2));
-    console.log(`📦 Delivery Charge: ₹${calculatedDeliveryCharge} (${calculatedDeliveryCharge === 0 ? 'FREE' : '₹20'})`);
 
     const { data: order, error: orderError } = await supabase
       .from('orders')
@@ -1373,11 +1367,13 @@ app.post('/api/orders', async (req, res) => {
       .single();
 
     if (orderError) {
-      console.error('Supabase insert error:', orderError);
+      console.error('❌ Supabase insert error:', orderError);
+      console.error('❌ Error details:', JSON.stringify(orderError, null, 2));
+      
       return res.status(500).json({
         success: false,
-        message: 'Failed to place order',
-        error: orderError.message
+        message: 'Failed to place order: ' + (orderError.message || 'Unknown error'),
+        details: orderError.details || orderError.hint || 'Please check Supabase table schema'
       });
     }
 
@@ -1400,7 +1396,6 @@ app.post('/api/orders', async (req, res) => {
     }
 
     console.log(`✅ Order placed successfully! ID: ${order.id}`);
-    console.log(`💰 Total: ₹${finalTotal} (Subtotal: ₹${subtotal || 0} + Delivery: ₹${calculatedDeliveryCharge})`);
     
     res.status(201).json({
       success: true,
@@ -1511,8 +1506,6 @@ app.get('/api/orders/:id/tracking', async (req, res) => {
               currentStatus: order.status,
               createdAt: order.created_at,
               items: order.items,
-              subtotal: order.subtotal || 0,
-              deliveryCharge: order.delivery_charge || 0,
               total: order.total,
               delivery: order.delivery,
               timeline: timeline,
