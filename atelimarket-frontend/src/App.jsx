@@ -838,13 +838,15 @@ export default function App() {
   };
 
   // =============================================
-  // DELIVERY CHARGE CALCULATION
+  // ✅ DELIVERY CHARGE CALCULATION - UPDATED
   // =============================================
   const calculateDeliveryCharge = (subtotal) => {
-    if (subtotal <= 500) {
-      return 70;
+    // ✅ Free delivery on ₹199 or more
+    if (subtotal >= 199) {
+      return 0;
     }
-    return 50;
+    // ✅ ₹20 delivery charge for orders below ₹199
+    return 20;
   };
 
   // =============================================
@@ -902,6 +904,7 @@ export default function App() {
       localStorage.setItem('atelimarket_used_refs', JSON.stringify(freshUsed));
     }
 
+    // ✅ Updated delivery charge calculation
     const deliveryCharge = calculateDeliveryCharge(totalCartPrice);
     const finalTotal = totalCartPrice + deliveryCharge;
 
@@ -1311,6 +1314,7 @@ export default function App() {
     return sum + ((item.originalPrice - item.price) * item.qty);
   }, 0);
   
+  // ✅ Updated delivery charge
   const deliveryCharge = calculateDeliveryCharge(totalCartPrice);
   const grandTotal = totalCartPrice + deliveryCharge;
 
@@ -2177,7 +2181,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Cart Sidebar */}
+      {/* Cart Sidebar - Updated with new delivery logic and UPI QR */}
       {isCartOpen && (
         <div className="fixed inset-0 bg-slate-900/60 z-50 flex justify-end backdrop-blur-sm" onClick={() => setIsCartOpen(false)}>
           <div className="bg-white w-full max-w-md h-full shadow-2xl p-6 flex flex-col" onClick={(e) => e.stopPropagation()}>
@@ -2223,10 +2227,30 @@ export default function App() {
                   <span className="font-bold">₹{totalCartPrice}</span>
                 </div>
                 
+                {/* ✅ Updated Delivery Charge Display */}
                 <div className="flex justify-between items-center text-sm">
                   <span className="text-slate-500">Delivery Charge</span>
-                  <span className="font-bold text-[#FF5722]">₹{deliveryCharge}</span>
+                  <span className={`font-bold ${deliveryCharge === 0 ? 'text-green-600' : 'text-[#FF5722]'}`}>
+                    {deliveryCharge === 0 ? '🎉 Free' : `₹${deliveryCharge}`}
+                  </span>
                 </div>
+                
+                {/* ✅ Free Delivery Info */}
+                {deliveryCharge === 0 && (
+                  <div className="bg-green-50 rounded-lg p-2 text-center">
+                    <p className="text-[10px] text-green-600 font-bold">
+                      🎉 Free delivery! (Order above ₹199)
+                    </p>
+                  </div>
+                )}
+                
+                {deliveryCharge > 0 && (
+                  <div className="bg-slate-50 rounded-lg p-2 text-center">
+                    <p className="text-[10px] text-slate-500">
+                      Add ₹{199 - totalCartPrice} more for free delivery 🚚
+                    </p>
+                  </div>
+                )}
                 
                 {totalSavings > 0 && (
                   <div className="flex justify-between items-center text-xs text-green-600">
@@ -2238,14 +2262,6 @@ export default function App() {
                 <div className="flex justify-between items-center font-bold text-sm pt-2 border-t border-slate-100">
                   <span className="text-slate-600">Grand Total:</span>
                   <span className="text-[#0B3C5D] text-lg font-black">₹{grandTotal}</span>
-                </div>
-
-                <div className="bg-slate-50 rounded-lg p-2 text-center">
-                  <p className="text-[10px] text-slate-500">
-                    {totalCartPrice <= 500 
-                      ? '🚚 Delivery charge ₹70 (Order below ₹500)' 
-                      : '🚚 Delivery charge ₹50 (Order above ₹500)'}
-                  </p>
                 </div>
 
                 {checkoutOpen ? (
@@ -2322,7 +2338,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Payment Method */}
+                    {/* Payment Method - Updated with UPI QR */}
                     <div className="rounded-xl border border-slate-200 p-3 bg-slate-50">
                       <p className="text-[10px] font-bold uppercase text-slate-400 mb-2">Payment Method</p>
                       <div className="grid grid-cols-2 gap-2">
@@ -2360,40 +2376,65 @@ export default function App() {
 
                       {paymentMethod === 'online' && (
                         <div className="mt-3 space-y-2">
+                          {/* ✅ QR Code with UPI - Google Charts API */}
                           <div className="rounded-xl border border-dashed border-[#0B3C5D] bg-white p-3 text-center">
-                            <p className="text-[10px] font-bold uppercase text-slate-400">Scan QR</p>
+                            <p className="text-[10px] font-bold uppercase text-slate-400">Scan QR to Pay</p>
+                            
                             <img 
-                              src={`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=upi://pay?pa=8901346287@fam&pn=AteliMarket&tn=AteliMarket%20Order%20Amount%20${grandTotal}&am=${grandTotal}&cu=INR`} 
+                              src={`https://chart.googleapis.com/chart?cht=qr&chs=250x250&chl=upi://pay?pa=8901346287@fam&pn=AteliMarket&am=${grandTotal}&cu=INR&tn=AteliMarket%20Order`}
                               alt="UPI QR" 
                               className="mx-auto my-2 w-36 h-36"
                               onError={(e) => {
                                 e.target.onerror = null;
-                                e.target.src = `https://chart.googleapis.com/chart?cht=qr&chs=220x220&chl=upi://pay?pa=8901346287@fam&pn=AteliMarket&tn=AteliMarket%20Order%20Amount%20${grandTotal}&am=${grandTotal}&cu=INR`;
+                                e.target.src = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=upi://pay?pa=8901346287@fam&am=${grandTotal}&cu=INR`;
                               }}
                             />
+                            
                             <p className="text-xs font-bold text-[#0B3C5D]">UPI: 8901346287@fam</p>
                             <p className="text-sm font-bold text-green-600 mt-1">
-                              Amount: ₹{grandTotal}
+                              💰 Amount: ₹{grandTotal}
                             </p>
                             <p className="text-[11px] text-slate-500 mt-1">
-                              💡 Includes delivery charge: ₹{deliveryCharge}
+                              🔄 Includes delivery charge: ₹{deliveryCharge}
                             </p>
-                          </div>
-                          
-                          <div className="flex flex-col gap-2">
+                            
+                            {/* Direct UPI Pay Button */}
                             <a 
-                              href={`upi://pay?pa=8901346287@fam&pn=AteliMarket&tn=AteliMarket%20Order%20Amount%20${grandTotal}&am=${grandTotal}&cu=INR`}
+                              href={`upi://pay?pa=8901346287@fam&pn=AteliMarket&am=${grandTotal}&cu=INR&tn=AteliMarket%20Order`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="w-full bg-green-600 text-white font-bold py-3 rounded-xl text-sm hover:bg-green-700 transition text-center flex items-center justify-center gap-2"
+                              className="w-full bg-gradient-to-r from-green-500 to-green-600 text-white font-bold py-3 rounded-xl text-sm hover:from-green-600 hover:to-green-700 transition text-center flex items-center justify-center gap-2 shadow-md mt-3"
                             >
                               <span>📱</span> Pay ₹{grandTotal} via UPI
                             </a>
                             <p className="text-[10px] text-slate-400 text-center">
                               Opens your UPI app with amount ₹{grandTotal} pre-filled
                             </p>
+                            
+                            {/* Manual UPI ID (Backup) */}
+                            <div className="mt-3 pt-3 border-t border-slate-200">
+                              <p className="text-[10px] font-bold uppercase text-slate-400">Manual Payment</p>
+                              <div className="flex items-center justify-center gap-2 mt-1">
+                                <span className="font-mono text-xs font-bold text-[#0B3C5D] bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
+                                  8901346287@fam
+                                </span>
+                                <button 
+                                  onClick={() => {
+                                    navigator.clipboard?.writeText('8901346287@fam');
+                                    showToast('UPI ID copied!', 'success');
+                                  }}
+                                  className="bg-[#0B3C5D] text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-[#07263b] transition"
+                                >
+                                  Copy UPI
+                                </button>
+                              </div>
+                              <p className="text-[10px] text-slate-400 mt-1">
+                                Send ₹{grandTotal} to this UPI ID
+                              </p>
+                            </div>
                           </div>
 
+                          {/* Reference ID Section */}
                           <div className="rounded-lg border border-slate-200 bg-white p-2">
                             <p className="text-[10px] font-bold uppercase text-slate-400">One-time Reference ID</p>
                             <div className="flex items-center gap-2 mt-1">
